@@ -1,0 +1,140 @@
+name: Free public unsigned APK candidate
+
+# Publish only after verifying this separate source-build repository is public.
+# Standard public runner only. Source checkout is pinned to its reviewed commit.
+# No paid runner, signing, model download, cache, emulator or release publishing.
+on:
+  push:
+    branches: ['main']
+    paths: ['.github/workflows/free-unsigned-apk.yml']
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: free-unsigned-apk-934f970
+  cancel-in-progress: false
+
+jobs:
+  unsigned-apk:
+    # Evaluated before a runner is allocated. No private-repository execution.
+    if: >-
+      github.repository == 'xMilo-At-Your-Side/BiliPop-build' &&
+      github.event.repository.private == false &&
+      github.event.deleted == false &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CI: '1'
+      EXPO_NO_TELEMETRY: '1'
+      BILIPOP_QA: '0'
+      NODE_OPTIONS: '--max-old-space-size=2048'
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
+      SOURCE_SHA: '934f97060d18381751ed17aa42232df144bc7dc7'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: Hatsunama/BiliPop-build
+          ref: '934f97060d18381751ed17aa42232df144bc7dc7'
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          # Deliberately no dependency cache or registry credentials.
+      - name: Verify exact source and record allowlisted provenance
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -x "$JAVA_HOME_17_X64/bin/java"
+          echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_17_X64/bin" >> "$GITHUB_PATH"
+          mkdir -p artifacts/free-apk
+          # Do not dump env, git config, npm config, contexts, or credentials.
+          # No secret inputs, persisted checkout credentials, or raw log uploads.
+          {
+            printf 'build_repository=xMilo-At-Your-Side/BiliPop-build\nsource_repository=Hatsunama/BiliPop-build\nsource_sha=%s\nsource_tree=%s\n' "$SOURCE_SHA" "$(git rev-parse HEAD^{tree})"
+            printf 'workflow_sha=%s\nrun_id=%s\nrun_attempt=%s\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            printf 'runner_image=%s\nrunner_image_version=%s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+            printf 'node='; node --version
+            printf 'npm='; npm --version
+            "$JAVA_HOME_17_X64/bin/java" -version 2>&1
+            sha256sum package.json package-lock.json scripts/release-config.mjs scripts/verify-model-contract.mjs
+            printf 'artifact=UNSIGNED APK; arm64-v8a only; no device or inference validation\n'
+          } > artifacts/free-apk/provenance.txt
+      - name: Install locked dependencies and run source regressions
+        run: |
+          npm ci --no-audit --no-fund
+          npm run check
+          node scripts/verify-model-contract.mjs
+          git diff --exit-code
+          git diff --cached --exit-code
+      - name: Generate unsigned production-identity Android project
+        run: |
+          NODE_ENV=production npx --no-install expo prebuild --platform android --no-install
+          grep -F 'gradle-9.3.1-bin.zip' android/gradle/wrapper/gradle-wrapper.properties
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import { unsignedReleaseGradle } from './scripts/release-config.mjs';
+          const path = 'android/app/build.gradle';
+          writeFileSync(path, unsignedReleaseGradle(readFileSync(path, 'utf8')));
+          NODE
+          # No private signing material is passed, generated, or uploaded.
+          git diff --exit-code
+      - name: Assemble only the arm64 unsigned APK
+        env:
+          NODE_ENV: production
+        run: |
+          ./android/gradlew -p android :app:assembleRelease \
+            -PreactNativeArchitectures=arm64-v8a \
+            --no-daemon --max-workers=1 --no-parallel --console=plain \
+            '-Dorg.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=1024m' \
+            -Pkotlin.compiler.execution.strategy=in-process
+      - name: Validate and collect only APK, checksum, and provenance
+        run: |
+          set -euo pipefail
+          apk=android/app/build/outputs/apk/release/app-release-unsigned.apk
+          test -s "$apk"
+          test "$(stat -c %s "$apk")" -le 268435456 # Maximum APK: 256 MiB
+          unzip -tq "$apk"
+          # A successfully verified signing certificate is forbidden here.
+          apksigner=$(find "$ANDROID_HOME/build-tools" -mindepth 2 -maxdepth 2 -name apksigner -type f | sort -V | tail -n 1)
+          test -n "$apksigner"
+          if "$apksigner" verify "$apk" >/dev/null 2>&1; then
+            echo 'Unexpected signed APK; refusing upload.' >&2
+            exit 1
+          fi
+          python3 - "$apk" <<'PY'
+          import sys, zipfile
+          with zipfile.ZipFile(sys.argv[1]) as archive:
+              names = archive.namelist()
+              assert 'AndroidManifest.xml' in names
+              assert not any(n.upper().startswith('META-INF/') and n.upper().endswith(('.SF', '.RSA', '.DSA', '.EC')) for n in names), 'Unexpected signing metadata'
+              assert not any(n.lower().endswith(('.litertlm', '.onnx', '.gguf', '.tflite', '.jks', '.keystore', '.aab')) for n in names), 'Unexpected model, key, or bundle in APK'
+              abis = {n.split('/')[1] for n in names if n.startswith('lib/') and n.endswith('.so')}
+              assert abis == {'arm64-v8a'}, f'Unexpected native architectures: {abis}'
+          PY
+          cp "$apk" artifacts/free-apk/bilipop-934f970-arm64-unsigned.apk
+          (cd artifacts/free-apk && sha256sum bilipop-934f970-arm64-unsigned.apk > SHA256SUMS.txt)
+          sha256sum android/gradle/wrapper/gradle-wrapper.properties >> artifacts/free-apk/provenance.txt
+          test "$(stat -c %s artifacts/free-apk/provenance.txt)" -le 65536
+          test "$(stat -c %s artifacts/free-apk/SHA256SUMS.txt)" -le 1024
+      - name: Upload successful unsigned candidate only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: bilipop-934f970-arm64-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 1
+          if-no-files-found: error
+          compression-level: 0
+          include-hidden-files: false
+          path: |
+            artifacts/free-apk/bilipop-934f970-arm64-unsigned.apk
+            artifacts/free-apk/SHA256SUMS.txt
+            artifacts/free-apk/provenance.txt

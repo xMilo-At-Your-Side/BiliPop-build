@@ -16,7 +16,7 @@ defaults:
     shell: bash
 
 concurrency:
-  group: free-unsigned-apk-934f970
+  group: free-unsigned-apk-6632bbb
   cancel-in-progress: false
 
 jobs:
@@ -35,12 +35,12 @@ jobs:
       BILIPOP_QA: '0'
       NODE_OPTIONS: '--max-old-space-size=2048'
       CMAKE_BUILD_PARALLEL_LEVEL: '2'
-      SOURCE_SHA: '934f97060d18381751ed17aa42232df144bc7dc7'
+      SOURCE_SHA: '6632bbbf695ca75cff704fb3a8df68551a58d732'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: Hatsunama/BiliPop-build
-          ref: '934f97060d18381751ed17aa42232df144bc7dc7'
+          ref: '6632bbbf695ca75cff704fb3a8df68551a58d732'
           persist-credentials: false
           fetch-depth: 1
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -121,20 +121,20 @@ jobs:
               abis = {n.split('/')[1] for n in names if n.startswith('lib/') and n.endswith('.so')}
               assert abis == {'arm64-v8a'}, f'Unexpected native architectures: {abis}'
           PY
-          cp "$apk" artifacts/free-apk/bilipop-934f970-arm64-unsigned.apk
-          (cd artifacts/free-apk && sha256sum bilipop-934f970-arm64-unsigned.apk > SHA256SUMS.txt)
+          cp "$apk" artifacts/free-apk/bilipop-6632bbb-arm64-unsigned.apk
+          (cd artifacts/free-apk && sha256sum bilipop-6632bbb-arm64-unsigned.apk > SHA256SUMS.txt)
           sha256sum android/gradle/wrapper/gradle-wrapper.properties >> artifacts/free-apk/provenance.txt
           test "$(stat -c %s artifacts/free-apk/provenance.txt)" -le 65536
           test "$(stat -c %s artifacts/free-apk/SHA256SUMS.txt)" -le 1024
       - name: Upload successful unsigned candidate only
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: bilipop-934f970-arm64-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
+          name: bilipop-6632bbb-arm64-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
           retention-days: 1
           if-no-files-found: error
           compression-level: 0
           include-hidden-files: false
           path: |
-            artifacts/free-apk/bilipop-934f970-arm64-unsigned.apk
+            artifacts/free-apk/bilipop-6632bbb-arm64-unsigned.apk
             artifacts/free-apk/SHA256SUMS.txt
             artifacts/free-apk/provenance.txt
